@@ -1,0 +1,17 @@
+{
+  "name": "bot-pagomoviles-baileys",
+  "version": "1.0.0",
+  "description": "Bot de WhatsApp ligero con Baileys",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.7",
+    "axios": "^1.6.7",
+    "express": "^4.19.2",
+    "papaparse": "^5.4.1",
+    "pino": "^8.20.0",
+    "qrcode": "^1.5.3"
+  }
+}
