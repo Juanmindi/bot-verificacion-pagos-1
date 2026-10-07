@@ -22,7 +22,6 @@ app.get('/', (req, res) => {
                     <div style="text-align:center; background:white; padding:30px; border-radius:10px; box-shadow:0 0 15px rgba(0,0,0,0.2);">
                         <h2>Escanea este QR con WhatsApp</h2>
                         <img src="${qrBase64}" alt="QR Code" style="width:300px; height:300px; margin: 15px 0;"/>
-                        <p style="color:gray;">Si escaneas y no pasa nada, recarga esta página para un QR nuevo.</p>
                     </div>
                 </body>
             </html>
@@ -36,17 +35,36 @@ app.listen(port, () => {
     console.log(`Servidor web corriendo en el puerto ${port}`);
 });
 
-// FUNCIÓN SÚPER FLEXIBLE PARA LEER CUALQUIER MONTO
+// FUNCIÓN MATEMÁTICA DEFINITIVA PARA ENTENDER CUALQUIER MONTO
 function parseMonto(montoStr) {
     if (!montoStr) return NaN;
-    let limpio = String(montoStr).replace(/[^\d.,]/g, '');
+    // Dejamos solo los números, puntos y comas
+    let limpio = String(montoStr).trim().replace(/[^\d.,]/g, '');
+    if (!limpio) return NaN;
+
     let lastDot = limpio.lastIndexOf('.');
     let lastComma = limpio.lastIndexOf(',');
-    
-    if (lastComma > lastDot) {
-        limpio = limpio.replace(/\./g, '').replace(',', '.');
-    } else if (lastDot > lastComma) {
-        limpio = limpio.replace(/,/g, '');
+
+    if (lastDot !== -1 && lastComma !== -1) {
+        if (lastComma > lastDot) {
+            // Ejemplo: 1.000,00 -> 1000.00
+            limpio = limpio.replace(/\./g, '').replace(',', '.');
+        } else {
+            // Ejemplo: 1,000.00 -> 1000.00
+            limpio = limpio.replace(/,/g, '');
+        }
+    } else if (lastComma !== -1) {
+        // Solo tiene coma (Ej: 100,50 o 1000)
+        if (limpio.length - lastComma <= 3) {
+            limpio = limpio.replace(',', '.'); // Es un decimal
+        } else {
+            limpio = limpio.replace(',', ''); // Es separador de miles
+        }
+    } else if (lastDot !== -1) {
+        // Solo tiene punto
+        if (limpio.length - lastDot > 3) {
+            limpio = limpio.replace(/\./g, ''); // Es separador de miles
+        }
     }
     return parseFloat(limpio);
 }
@@ -65,16 +83,10 @@ async function connectToWhatsApp() {
 
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
-
-        if (qr) {
-            console.log('Nuevo QR generado. Entra a tu página web de Render para escanearlo.');
-            qrBase64 = await qrcode.toDataURL(qr);
-        }
-
+        if (qr) qrBase64 = await qrcode.toDataURL(qr);
         if (connection === 'close') {
             isConnected = false;
-            const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) connectToWhatsApp();
+            if (lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut) connectToWhatsApp();
         } else if (connection === 'open') {
             isConnected = true;
             qrBase64 = ''; 
@@ -87,18 +99,24 @@ async function connectToWhatsApp() {
         if (!msg.message || msg.key.fromMe) return;
 
         const remoteJid = msg.key.remoteJid;
-        const msgText = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
+        
+        // ¡Magia aquí! Ahora lee el texto de los mensajes y también de los pies de foto
+        const msgText = msg.message.conversation || 
+                        msg.message.extendedTextMessage?.text || 
+                        msg.message.imageMessage?.caption || 
+                        "";
+                        
         const msgLower = msgText.toLowerCase();
 
         if (msgLower.includes('verificar')) {
-            // Buscamos la referencia (agarrará los dígitos que le pongas, ej: r998589)
             const refMatch = msgLower.match(/r\s*(\d+)/i) || msgLower.match(/(?:ref|referencia)?\s*(\d{4,})/i);
 
             if (refMatch) {
                 const refBuscada = refMatch[1];
-                
                 const msgSinRef = msgLower.replace(refMatch[0], '');
-                const amountMatch = msgSinRef.match(/([\d.,]+)\s*(?:bs|ves)?/i);
+                
+                // Lee el monto que esté justo antes de las letras "bs"
+                const amountMatch = msgSinRef.match(/([\d.,]+)\s*(?:bs|ves)/i);
 
                 if (amountMatch) {
                     const montoOriginalStr = amountMatch[1];
@@ -117,15 +135,13 @@ async function connectToWhatsApp() {
                             const keyRef = keys.find(k => k.toLowerCase().includes('ref')) || keys[0];
                             const keyMonto = keys.find(k => k.toLowerCase().includes('monto')) || keys[1];
                             const keyFecha = keys.find(k => k.toLowerCase().includes('fecha')) || keys[2];
-                            const keyBanco = keys.find(k => k.toLowerCase().includes('banco')) || keys[4];
+                            // Se adaptará automáticamente a tu nueva columna "BANCO RECEPTOR"
+                            const keyBanco = keys.find(k => k.toLowerCase().includes('banco')) || keys[5];
 
                             const refEnHoja = String(fila[keyRef] || '').trim();
                             const montoEnHojaNum = parseMonto(fila[keyMonto]); 
 
-                            // COMPROBACIÓN EXACTA DE ÚLTIMOS DÍGITOS
-                            // Verifica si la referencia guardada termina con los números que tú escribiste
                             const coincideRef = refEnHoja.endsWith(refBuscada) || refEnHoja === refBuscada;
-                            
                             const coincideMonto = !isNaN(montoBuscadoNum) && !isNaN(montoEnHojaNum) 
                                 ? Math.abs(montoBuscadoNum - montoEnHojaNum) < 0.01 
                                 : false;
@@ -134,7 +150,7 @@ async function connectToWhatsApp() {
                                 pagoEncontrado = {
                                     fecha: fila[keyFecha] || 'Fecha no registrada',
                                     monto: fila[keyMonto] || montoOriginalStr,
-                                    referencia: refEnHoja, // Muestra la referencia completa en la respuesta
+                                    referencia: refEnHoja, 
                                     banco: (keyBanco && fila[keyBanco] && fila[keyBanco].trim() !== '') ? fila[keyBanco] : 'Mercantil'
                                 };
                                 break;
